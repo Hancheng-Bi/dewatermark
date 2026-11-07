@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>De-watermark</title>
+<style>
+:root{--bg:#0e0f12;--panel:#17191e;--line:#2a2d35;--text:#e8e9ec;--dim:#8b8f99;--accent:#7cc4ff;--ok:#6fdc8c}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding:14px 20px;border-bottom:1px solid var(--line)}
+h1{font-size:15px;font-weight:600;margin:0}
+.hint{color:var(--dim)}
+a{color:var(--accent)}
+kbd{background:#23262d;border:1px solid var(--line);border-radius:4px;padding:1px 6px;font:12px ui-monospace,Menlo,monospace}
+.controls{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;padding:12px 20px;border-bottom:1px solid var(--line);background:var(--panel)}
+.ctl{display:flex;align-items:center;gap:8px}
+.ctl label{color:var(--dim)}
+.ctl output{font:12px ui-monospace,Menlo,monospace;min-width:30px}
+input[type=range]{width:160px;accent-color:var(--accent)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{border:0;border-radius:0;background:transparent;color:var(--dim);padding:6px 12px}
+.seg button[aria-pressed=true]{background:#2b3a4a;color:var(--text)}
+button{background:#23262d;color:var(--text);border:1px solid var(--line);border-radius:7px;padding:7px 14px;font:inherit;cursor:pointer}
+button:hover{border-color:#444955}
+button.primary{background:var(--accent);color:#06121d;border-color:var(--accent);font-weight:600}
+button:disabled{opacity:.4;cursor:default}
+.spacer{flex:1}
+#status{color:var(--dim);font-size:13px}
+#status.ok{color:var(--ok)}
+main{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);min-height:calc(100vh - 110px)}
+.pane{background:var(--bg);position:relative;overflow:auto;display:flex;align-items:flex-start;justify-content:center;padding:16px;min-height:300px}
+.pane h2{margin:0;font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--dim);position:absolute;left:16px;top:10px}
+.pane img{max-width:100%;margin-top:18px;border:1px solid var(--line);border-radius:4px}
+#drop{position:absolute;inset:16px;border:2px dashed var(--line);border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--dim);text-align:center;padding:12px}
+#drop.over{border-color:var(--accent);color:var(--accent)}
+#drop big{font-size:18px;color:var(--text)}
+@media (max-width:800px){main{grid-template-columns:1fr}}
+</style></head><body>
+<header>
+  <h1>De-watermark</h1>
+  <span class="hint">Paste an image with <kbd>⌘V</kbd> / <kbd>Ctrl V</kbd>, drop a file, or <a href="#" id="pick">choose one</a>.</span>
+  <input type="file" id="file" accept="image/*" hidden>
+</header>
+<div class="controls">
+  <div class="seg" role="group" aria-label="Mode">
+    <button data-mode="screenshot" aria-pressed="true" title="Clean, evenly lit images">Screenshot</button>
+    <button data-mode="photo" aria-pressed="false" title="Photos/scans: fixes uneven light, blur, noise">Photo</button>
+  </div>
+  <div class="ctl"><input type="checkbox" id="auto" checked><label for="auto">Auto cut</label></div>
+  <div class="ctl"><label for="cut">Cut</label><input type="range" id="cut" min="1" max="250" value="120" disabled><output id="cutv">–</output></div>
+  <div class="ctl"><label for="soft">Edge softness</label><input type="range" id="soft" min="1" max="120" value="40"><output id="softv">40</output></div>
+  <span class="spacer"></span>
+  <span id="status"></span>
+  <button id="download" disabled>Download</button>
+  <button id="copy" class="primary" disabled>Copy result</button>
+</div>
+<main>
+  <section class="pane"><h2>Original</h2>
+    <div id="drop"><big>Paste an image here</big><span><kbd>⌘V</kbd> / <kbd>Ctrl V</kbd> anywhere on this page</span></div>
+    <img id="before" hidden alt="Original image">
+  </section>
+  <section class="pane"><h2>Cleaned</h2><img id="after" hidden alt="Cleaned image"></section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+let srcBlob=null,outBlob=null,timer=null,seq=0,mode='screenshot';
+function setStatus(t,ok){$('status').textContent=t;$('status').className=ok?'ok':''}
+function load(blob){
+  if(!blob||!blob.type.startsWith('image/')){setStatus('That is not an image');return}
+  srcBlob=blob;
+  $('before').src=URL.createObjectURL(blob);$('before').hidden=false;$('drop').hidden=true;
+  run(true);
+}
+async function run(autocopy){
+  if(!srcBlob)return;
+  const my=++seq,auto=$('auto').checked;
+  const q=new URLSearchParams({soft:$('soft').value,mode});
+  if(!auto)q.set('cut',$('cut').value);
+  setStatus('Cleaning…');
+  try{
+    const r=await fetch('/process?'+q,{method:'POST',body:srcBlob});
+    if(!r.ok)throw new Error(await r.text());
+    const cut=r.headers.get('X-Cut'),b=await r.blob();
+    if(my!==seq)return;
+    outBlob=b;
+    $('after').src=URL.createObjectURL(b);$('after').hidden=false;
+    if(auto)$('cut').value=cut;
+    $('cutv').textContent=cut;
+    $('copy').disabled=$('download').disabled=false;
+    setStatus('Done · cut '+cut+(auto?' (auto)':''),true);
+    if(autocopy)copy(true);
+  }catch(e){setStatus('Error: '+e.message)}
+}
+async function copy(quiet){
+  if(!outBlob)return;
+  try{await navigator.clipboard.write([new ClipboardItem({'image/png':outBlob})]);setStatus('Copied to clipboard ✓',true)}
+  catch(e){if(!quiet)setStatus('Copy blocked by the browser; use Download')}
+}
+function rerun(){clearTimeout(timer);timer=setTimeout(()=>run(false),120)}
+document.addEventListener('paste',e=>{
+  for(const it of e.clipboardData.items){if(it.type.startsWith('image/')){load(it.getAsFile());e.preventDefault();return}}
+  setStatus('No image on the clipboard');
+});
+const m=document.querySelector('main');
+m.addEventListener('dragover',e=>{e.preventDefault();$('drop').classList.add('over')});
+m.addEventListener('dragleave',()=>$('drop').classList.remove('over'));
+m.addEventListener('drop',e=>{e.preventDefault();$('drop').classList.remove('over');load(e.dataTransfer.files[0])});
+$('pick').onclick=e=>{e.preventDefault();$('file').click()};
+$('file').onchange=e=>load(e.target.files[0]);
+document.querySelectorAll('.seg button').forEach(b=>b.onclick=()=>{
+  mode=b.dataset.mode;
+  document.querySelectorAll('.seg button').forEach(x=>x.setAttribute('aria-pressed',x===b));
+  run(false);
+});
+$('auto').onchange=()=>{$('cut').disabled=$('auto').checked;rerun()};
+$('cut').oninput=()=>{$('cutv').textContent=$('cut').value;rerun()};
+$('soft').oninput=()=>{$('softv').textContent=$('soft').value;rerun()};
+$('copy').onclick=()=>copy(false);
+$('download').onclick=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(outBlob);a.download='cleaned.png';a.click()};
+</script></body></html>
